@@ -69,11 +69,39 @@ constant near the top of whichever script you run.
 
 **`scrape_earnings_calls_interactive.R`**
 
-Prompts you for two parameters and then runs:
+> **Important:** this script must be run from a **Terminal** (macOS Terminal,
+> iTerm2, etc.), not from RStudio's Source button. The interactive prompts rely
+> on terminal stdin and will not work when sourced inside an IDE.
 
+#### Step 1 — open a Terminal and navigate to the project folder
+
+```bash
+cd /path/to/earnings-call-transcripts
 ```
+
+#### Step 2 — confirm you are using the correct Rscript
+
+```bash
+which Rscript
+```
+
+The path should point to your main R installation (e.g. `/usr/local/bin/Rscript`).
+If it resolves to an Anaconda or conda-managed path instead, call Rscript by
+its full path in the next step (e.g. `/usr/local/bin/Rscript`).
+
+#### Step 3 — run the script
+
+```bash
 Rscript scrape_earnings_calls_interactive.R
 ```
+
+Or, if you need to specify the full path to Rscript:
+
+```bash
+/usr/local/bin/Rscript scrape_earnings_calls_interactive.R
+```
+
+The script will print a banner and prompt you for two inputs:
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
@@ -90,6 +118,19 @@ Rscript scrape_earnings_calls_interactive.R
 
   Start scraping? [Y/n] >
 ```
+
+#### Running from RStudio (non-interactive alternative)
+
+If you prefer to run from RStudio, open the script and set your parameters
+directly in the `USER CONFIGURATION` block near the top — the prompts will be
+skipped automatically:
+
+```r
+N_TRANSCRIPTS_CONFIG <- 100             # max transcripts to collect
+DATE_RANGE_CONFIG    <- "Q1 2022 - Q4 2024"  # or NA for most-recent
+```
+
+Then source the file as usual.
 
 **Date range format:** `Q1 YYYY - Q4 YYYY`
 
