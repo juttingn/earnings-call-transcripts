@@ -20,8 +20,8 @@ This scraper is a first step to deepen the analysis of my Master Thesis by recov
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Scripts](#scripts)
-  - [Interactive scraper](#1-interactive-scraper-recommended)
-  - [Quick test scraper](#2-quick-test-scraper)
+  - [Quick test scraper](#1-quick-test-scraper)
+  - [Interactive scraper](#2-interactive-scraper)
   - [Full bulk scraper](#3-full-bulk-scraper)
 - [Output format](#output-format)
 - [Project structure](#project-structure)
@@ -73,13 +73,37 @@ constant near the top of whichever script you run.
 
 ## Scripts
 
-### 1. Interactive scraper (recommended)
+**Recommended order of use:**
+1. Start with the **quick test scraper** to verify that Chrome, R, and all packages are working correctly on your machine.
+2. Once the test passes, use the **interactive scraper** to collect transcripts for your specific date range and/or company — allow extra time as this can take several minutes to hours depending on how many transcripts you request.
+3. Use the **full bulk scraper** only when you want the complete archive (~10,000 transcripts) — this is a long-running job intended to run overnight or over multiple sessions.
+
+---
+
+### 1. Quick test scraper
+
+**`scrape_earnings_calls.R`**
+
+A self-contained script for verifying that everything works before running the larger scrapers.
+Edit `N_TRANSCRIPTS` at the top to control how many articles are fetched
+(default: 5). No checkpointing — just runs straight through and saves one RDS.
+
+```bash
+Rscript scrape_earnings_calls.R
+```
+
+---
+
+### 2. Interactive scraper
 
 **`scrape_earnings_calls_interactive.R`**
 
 Prompts you for three parameters (transcript count, date range, and optional
 company filter) then scrapes in two phases: a fast listing-page scan followed
 by parallel article scraping across multiple Chrome workers.
+
+> **Time estimate:** plan for roughly 3–5 minutes per 50 transcripts with the
+> default 3 parallel workers. Larger requests (200+) can take an hour or more.
 
 > **Important:** this script must be run from a **Terminal** (macOS Terminal,
 > iTerm2, etc.), not from RStudio's Source button. The interactive prompts rely
@@ -165,26 +189,14 @@ without requiring a full scan of all pages.
 
 ---
 
-### 2. Quick test scraper
-
-**`scrape_earnings_calls.R`**
-
-A self-contained script for quickly testing that everything works.
-Edit `N_TRANSCRIPTS` at the top to control how many articles are fetched
-(default: 50). No checkpointing — just runs straight through and saves one RDS.
-
-```
-Rscript scrape_earnings_calls.R
-```
-
----
-
 ### 3. Full bulk scraper
 
 **`scrape_earnings_calls_full.R`**
 
 Designed to collect the entire archive (~10,000 transcripts across ~286
-listing pages). Key features:
+listing pages). **This is a long-running job — expect it to take many hours
+or days and plan to run it in the background across multiple sessions.**
+Key features:
 
 - **Checkpointing** — each transcript is immediately saved to
   `transcripts_raw/<id>.rds`; the current listing-page number is written to
