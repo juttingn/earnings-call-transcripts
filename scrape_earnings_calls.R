@@ -132,6 +132,12 @@ parse_transcript_page <- function(b, url) {
     html_text(trim = TRUE)
   message(sprintf("    title : %s", str_trunc(article_title, 80)))
 
+  # Skip anything that is not an earnings call transcript
+  if (!grepl("^Earnings call transcript:", article_title, ignore.case = TRUE)) {
+    message("    SKIP  not an earnings call transcript")
+    return(NULL)
+  }
+
   call_date <- extract_date_jsonld(page)
   message(sprintf("    date  : %s", call_date))
 
