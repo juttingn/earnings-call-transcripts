@@ -34,7 +34,20 @@ suppressMessages({
   library(jsonlite)
 })
 
-# ── Configuration (edit paths here if needed) ─────────────────────────────────
+# =============================================================================
+# ── USER CONFIGURATION ────────────────────────────────────────────────────────
+#
+# If you are running this script non-interactively (e.g. via RStudio's Source
+# button, or Rscript from a terminal that does not support stdin), set your
+# parameters here and the interactive prompts will be skipped automatically.
+#
+# Leave a value as NA to be prompted for it at run time instead.
+# =============================================================================
+
+N_TRANSCRIPTS_CONFIG <- NA          # e.g. 100  — max transcripts to collect
+DATE_RANGE_CONFIG    <- NA          # e.g. "Q1 2023 - Q4 2024"  or NA for most-recent
+
+# ── System configuration (edit paths here if needed) ─────────────────────────
 
 CHROME_PATH         <- "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 BASE_URL            <- "https://www.investing.com/news/transcripts"
@@ -99,19 +112,31 @@ cat("╚════════════════════════
 
 # ── Prompt 1: number of transcripts ───────────────────────────────────────────
 
-n_raw <- trimws(read_line("  How many transcripts to collect? [default: 50] > "))
-N_TRANSCRIPTS <- if (nchar(n_raw) == 0L) 50L else suppressWarnings(as.integer(n_raw))
+if (!is.na(N_TRANSCRIPTS_CONFIG)) {
+  N_TRANSCRIPTS <- as.integer(N_TRANSCRIPTS_CONFIG)
+  cat(sprintf("  Transcripts to collect : %d  (from USER CONFIGURATION block)\n",
+              N_TRANSCRIPTS))
+} else {
+  n_raw <- trimws(read_line("  How many transcripts to collect? [default: 50] > "))
+  N_TRANSCRIPTS <- if (nchar(n_raw) == 0L) 50L else suppressWarnings(as.integer(n_raw))
+}
 
 if (is.na(N_TRANSCRIPTS) || N_TRANSCRIPTS <= 0L)
   stop("Invalid input: please enter a positive whole number.")
 
 # ── Prompt 2: optional date range ─────────────────────────────────────────────
 
-cat("\n")
-cat("  Date range (e.g. Q1 2020 - Q4 2024).\n")
-range_raw <- trimws(read_line(
-  "  Press Enter to collect the most recent transcripts > "
-))
+if (!is.na(DATE_RANGE_CONFIG)) {
+  range_raw <- trimws(as.character(DATE_RANGE_CONFIG))
+  cat(sprintf("  Date range             : %s  (from USER CONFIGURATION block)\n",
+              range_raw))
+} else {
+  cat("\n")
+  cat("  Date range (e.g. Q1 2020 - Q4 2024).\n")
+  range_raw <- trimws(read_line(
+    "  Press Enter to collect the most recent transcripts > "
+  ))
+}
 
 use_date_filter <- nchar(range_raw) > 0L
 
@@ -320,6 +345,14 @@ parse_transcript_page <- function(b, url) {
   page <- read_html(raw_html)
 
   article_title <- page %>% html_element("h1") %>% html_text(trim = TRUE)
+
+  # Skip anything that is not an earnings call transcript
+  if (!grepl("^Earnings call transcript:", article_title, ignore.case = TRUE)) {
+    message(sprintf("    SKIP  not an earnings call transcript: %s",
+                    str_trunc(article_title, 70)))
+    return(NULL)
+  }
+
   call_date     <- extract_date_jsonld(page)
 
   # Locate the article body — prefer #article, fall back to largest div
