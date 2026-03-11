@@ -10,7 +10,7 @@ on both backward- and forward-looking matters they would like to get more detail
 
 This project directly relates to my Master Thesis, which you can find [here](https://juttingn.github.io/personal-site/thesis.pdf), where I used company earning calls to estimate the geoeconomic risk exposure companies have been facing over time, and looked at how said exposure affected firm's investment response to Russia's invasion of Ukraine.
 
-This scraper is a first step to deepen the analysis of my Master Thesis by recovering the full transcripts of the earnings calls, which were previously not accesible to me, and were instead accessed through the NL Analytics platform. The main disadvantage of this platform is that it only allows you to run a dictionary-based keyword query on the transcripts. By gaining full access to the transcripts, I pkan to use more sophisticated Large Language Model classification techniques in my analysis to further disentangle between the different types of geoeconomic risk companies are facing.
+This scraper is a first step to deepen the analysis of my Master Thesis by recovering the full transcripts of the earnings calls, which were previously not accesible to me, and were instead accessed through the NL Analytics platform. The main disadvantage of this platform is that it only allows you to run a dictionary-based keyword query on the transcripts. By gaining full access to the transcripts, I plan to use more sophisticated Large Language Model classification techniques in my analysis to further disentangle between the different types of geoeconomic risk companies are facing.
 
 ---
 
