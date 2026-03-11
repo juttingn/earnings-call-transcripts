@@ -444,23 +444,27 @@ parse_transcript_page <- function(b, url) {
         "^:\\s*"
       ))
 
-    # Separate speaker name from role
-    # Formats: "Operator" / "Jane Doe, CFO" / "Jane Doe (CFO)"
-    comma_parts <- str_split(speaker_raw, ",\\s*")[[1]]
-    role_paren  <- str_extract(speaker_raw, "\\(([^)]+)\\)", group = 1)
-    role_comma  <- if (length(comma_parts) >= 2L)
-      paste(comma_parts[-1], collapse = ", ") else NA_character_
-    role        <- coalesce(role_paren, role_comma, NA_character_)
-
-    speaker_name <- if (!is.na(role_paren))
+    # Separate speaker name, role, and company
+    # Formats: "Operator" / "Jane Doe, CFO" / "Jane Doe, CFO, Acme Corp" / "Jane Doe (CFO)"
+    role_paren      <- str_extract(speaker_raw, "\\(([^)]+)\\)", group = 1)
+    comma_parts     <- str_split(speaker_raw, ",\\s*")[[1]]
+    speaker_name    <- if (!is.na(role_paren))
       str_trim(str_remove(speaker_raw, "\\s*\\(.*"))
     else
       comma_parts[1]
+    speaker_role    <- if (!is.na(role_paren))
+      role_paren
+    else if (length(comma_parts) >= 2L) comma_parts[2] else NA_character_
+    speaker_company <- if (!is.na(role_paren))
+      NA_character_
+    else if (length(comma_parts) >= 3L)
+      paste(comma_parts[3:length(comma_parts)], collapse = ", ") else NA_character_
 
     tibble(
-      speaker      = speaker_name,
-      speaker_role = role,
-      text         = str_squish(speech)
+      speaker         = speaker_name,
+      speaker_role    = speaker_role,
+      speaker_company = speaker_company,
+      text            = str_squish(speech)
     )
   })
 
@@ -469,9 +473,10 @@ parse_transcript_page <- function(b, url) {
   # Last resort: store the full text as a single row if parsing found nothing
   if (nrow(speaker_df) == 0L) {
     speaker_df <- tibble(
-      speaker      = NA_character_,
-      speaker_role = NA_character_,
-      text         = paste(html_text(p_nodes, trim = TRUE), collapse = "\n") %>%
+      speaker         = NA_character_,
+      speaker_role    = NA_character_,
+      speaker_company = NA_character_,
+      text            = paste(html_text(p_nodes, trim = TRUE), collapse = "\n") %>%
         str_squish()
     )
   }
