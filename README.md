@@ -4,14 +4,6 @@ An R-based web scraper that collects earnings call transcripts from
 [investing.com/news/transcripts](https://www.investing.com/news/transcripts)
 and structures them into a tidy dataset for text analysis.
 
-Earnings calls provide a rich source of firm-level information typically occurring every quarter. Following a
-presentation of the company’s earnings, external analysts can ask questions in a Q&A session,
-on both backward- and forward-looking matters they would like to get more details on. The transcripts can be key insights into the most pressing issues companies are facing, and have been used to create indices of firm-level exposure to different topics over time.
-
-This project directly relates to my Master Thesis, which you can find [here](https://juttingn.github.io/personal-site/thesis.pdf), where I used company earning calls to estimate the geoeconomic risk exposure companies have been facing over time, and looked at how said exposure affected firm's investment response to Russia's invasion of Ukraine. 
-
-This scraper is a first step to deepen the analysis of my Master Thesis by recovering the full transcripts of the earnings calls, which were previously not accesible to me, and were instead accessed through the NL Analytics platform. The main disadvantage of this platform is that it only allows you to run a dictionary-based keyword query on the transcripts. By gaining full access to the transcripts, I pkan to use more sophisticated Large Language Model classification techniques in my analysis to further disentangle between the different types of geoeconomic risk companies are facing. 
-
 ---
 
 ## Table of Contents
@@ -207,7 +199,8 @@ All scripts produce the same RDS schema:
 | `call_year` | integer | Fiscal year (e.g. `2024`) |
 | `call_date` | Date | Publication date from JSON-LD structured data |
 | `speaker` | character | Speaker's name |
-| `speaker_role` | character | Speaker's title and affiliation |
+| `speaker_role` | character | Speaker's title or role (e.g. `"Chief Executive Officer"`) |
+| `speaker_company` | character | Company or firm the speaker represents (e.g. `"JP Morgan"`); `NA` if not stated |
 | `text` | character | Verbatim speech for that turn |
 
 One transcript typically produces 40–90 rows (one per speaker intervention).
@@ -279,5 +272,7 @@ scrape_errors.txt              # error log
   interactive and test scripts are single-run and do not checkpoint.
 - **NA values** — `ticker` and `company_name` may be `NA` for transcripts
   whose headings deviate from the standard format.
-- **`speaker_role`** includes both title and company affiliation
-  (e.g., `"Chief Executive Officer, Acme Corp"`).
+- **`speaker_role`** and **`speaker_company`** are split on the first comma in
+  the speaker line (e.g., `"Jane Doe, Chief Executive Officer, Acme Corp"` →
+  role `"Chief Executive Officer"`, company `"Acme Corp"`). `speaker_company`
+  is `NA` for speakers identified only by role (e.g., `"Operator"`).
