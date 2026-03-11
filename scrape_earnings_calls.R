@@ -226,27 +226,31 @@ parse_transcript_page <- function(b, url) {
         str_squish()
     }
 
-    # Parse speaker name vs role
+    # Parse speaker name, role, and company
     # Formats seen:  "Operator"
-    #                "Tiffany Sammis, Investor Relations, Natural Resource Partners L.P."
+    #                "Jane Doe, CFO"
+    #                "Jane Doe, Chief Executive Officer, Acme Corp"
     #                "Jane Doe (CFO)"
     role_paren  <- str_extract(speaker_raw, "\\(([^)]+)\\)", group = 1)
-    # Role after last comma (if more than one comma → role is after first comma)
     comma_parts <- str_split(speaker_raw, ",\\s*")[[1]]
-    role_comma  <- if (length(comma_parts) >= 2)
-      paste(comma_parts[-1], collapse = ", ") else NA_character_
 
-    role <- coalesce(role_paren, role_comma, NA_character_)
-
-    speaker_name <- speaker_raw %>%
-      str_remove("\\s*\\(.*")   %>%   # remove "(Role)"
-      { if (!is.na(role_comma)) comma_parts[1] else . } %>%
-      str_trim()
+    speaker_name    <- if (!is.na(role_paren))
+      str_trim(str_remove(speaker_raw, "\\s*\\(.*"))
+    else
+      comma_parts[1]
+    speaker_role    <- if (!is.na(role_paren))
+      role_paren
+    else if (length(comma_parts) >= 2L) comma_parts[2] else NA_character_
+    speaker_company <- if (!is.na(role_paren))
+      NA_character_
+    else if (length(comma_parts) >= 3L)
+      paste(comma_parts[3:length(comma_parts)], collapse = ", ") else NA_character_
 
     tibble(
-      speaker      = speaker_name,
-      speaker_role = role,
-      text         = str_squish(speech)
+      speaker         = speaker_name,
+      speaker_role    = speaker_role,
+      speaker_company = speaker_company,
+      text            = str_squish(speech)
     )
   })
 
@@ -255,7 +259,8 @@ parse_transcript_page <- function(b, url) {
   if (nrow(speaker_df) == 0) {
     # Last resort: return full text as single row
     full_text <- paste(html_text(p_nodes, trim = TRUE), collapse = "\n")
-    speaker_df <- tibble(speaker = NA, speaker_role = NA, text = str_squish(full_text))
+    speaker_df <- tibble(speaker = NA_character_, speaker_role = NA_character_,
+                         speaker_company = NA_character_, text = str_squish(full_text))
   }
 
   message(sprintf("    speaker rows: %d", nrow(speaker_df)))
