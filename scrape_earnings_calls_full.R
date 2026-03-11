@@ -248,24 +248,30 @@ parse_transcript_page <- function(b, url) {
         str_remove(html_text(p_node, trim = TRUE), fixed(speaker_raw)), "^:\\s*"
       ))
 
-    comma_parts  <- str_split(speaker_raw, ",\\s*")[[1]]
-    role_paren   <- str_extract(speaker_raw, "\\(([^)]+)\\)", group = 1)
-    role_comma   <- if (length(comma_parts) >= 2)
-      paste(comma_parts[-1], collapse = ", ") else NA_character_
-    role         <- coalesce(role_paren, role_comma, NA_character_)
-    speaker_name <- if (!is.na(role_paren))
+    role_paren      <- str_extract(speaker_raw, "\\(([^)]+)\\)", group = 1)
+    comma_parts     <- str_split(speaker_raw, ",\\s*")[[1]]
+    speaker_name    <- if (!is.na(role_paren))
       str_trim(str_remove(speaker_raw, "\\s*\\(.*")) else comma_parts[1]
+    speaker_role    <- if (!is.na(role_paren))
+      role_paren
+    else if (length(comma_parts) >= 2L) comma_parts[2] else NA_character_
+    speaker_company <- if (!is.na(role_paren))
+      NA_character_
+    else if (length(comma_parts) >= 3L)
+      paste(comma_parts[3:length(comma_parts)], collapse = ", ") else NA_character_
 
-    tibble(speaker = speaker_name, speaker_role = role, text = str_squish(speech))
+    tibble(speaker = speaker_name, speaker_role = speaker_role,
+           speaker_company = speaker_company, text = str_squish(speech))
   })
 
   speaker_df <- bind_rows(Filter(Negate(is.null), rows))
 
   if (nrow(speaker_df) == 0)
     speaker_df <- tibble(
-      speaker      = NA_character_,
-      speaker_role = NA_character_,
-      text         = paste(html_text(p_nodes, trim = TRUE), collapse = "\n") %>% str_squish()
+      speaker         = NA_character_,
+      speaker_role    = NA_character_,
+      speaker_company = NA_character_,
+      text            = paste(html_text(p_nodes, trim = TRUE), collapse = "\n") %>% str_squish()
     )
 
   speaker_df %>%
