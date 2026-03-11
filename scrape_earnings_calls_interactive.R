@@ -7,18 +7,27 @@
 # On start-up the script prompts the user for:
 #   (1) Maximum number of transcripts to collect (default: 50)
 #   (2) Optional date range expressed as "Q1 YYYY - Q4 YYYY"
+#        Note: investing.com transcripts are available from Q1 2025 onward.
+#   (3) Optional company name filter (as shown on investing.com)
 #
 # The scraper uses a real Chromium browser (via the {chromote} package) to
 # bypass Cloudflare protection, which blocks plain HTTP requests.
+#
+# Scraping runs in two phases for speed:
+#   Phase 1 — single Chrome session scans listing pages, pre-filters by title,
+#              date, and company name, and collects candidate article URLs.
+#   Phase 2 — N_PARALLEL Chrome workers scrape the candidate articles in
+#              parallel, giving an ~N_PARALLEL× speed improvement.
 #
 # Output
 #   An RDS file (default: earning_call_transcripts.rds) containing a
 #   data frame with one row per speaker turn.
 #   Columns: url, article_title, company_name, ticker, quarter, call_year,
-#            call_date, speaker, speaker_role, text
+#            call_date, speaker, speaker_role, speaker_company, text
 #
 # Requirements
 #   R >= 4.1, packages: chromote, rvest, dplyr, stringr, lubridate, jsonlite
+#   parallel (base R — no install needed)
 #   Google Chrome installed at CHROME_PATH (see Configuration block below)
 #
 # Usage
@@ -32,6 +41,7 @@ suppressMessages({
   library(stringr)
   library(lubridate)
   library(jsonlite)
+  library(parallel)
 })
 
 # =============================================================================
@@ -44,8 +54,9 @@ suppressMessages({
 # Leave a value as NA to be prompted for it at run time instead.
 # =============================================================================
 
-N_TRANSCRIPTS_CONFIG <- NA          # e.g. 100  — max transcripts to collect
-DATE_RANGE_CONFIG    <- NA          # e.g. "Q1 2023 - Q4 2024"  or NA for most-recent
+N_TRANSCRIPTS_CONFIG  <- NA   # e.g. 100          — max transcripts to collect
+DATE_RANGE_CONFIG     <- NA   # e.g. "Q1 2025 - Q4 2025"  or NA for most-recent
+COMPANY_FILTER_CONFIG <- NA   # e.g. "Apple"     — name as shown on investing.com, or NA for all
 
 # ── System configuration (edit paths here if needed) ─────────────────────────
 
@@ -56,11 +67,13 @@ OUTPUT_FILE         <- "earning_call_transcripts.rds"
 # Timing (seconds) — lower values may trigger Cloudflare; raise if you see errors
 WAIT_LIST           <- 10    # wait after navigating to a listing page
 WAIT_ARTICLE        <- 8     # wait after navigating to an article page
-DELAY_BETWEEN       <- 2     # polite pause between consecutive articles
-DELAY_BETWEEN_PAGES <- 3     # polite pause between consecutive listing pages
+DELAY_BETWEEN_PAGES <- 3     # polite pause between listing pages (Phase 1)
 
-# Memory management
-RESTART_CHROME_EVERY <- 100  # restart Chrome every N articles to prevent leaks
+# Parallel scraping (Phase 2)
+N_PARALLEL       <- 3   # simultaneous Chrome workers; raise for more speed,
+                         # lower if Cloudflare starts blocking you
+CANDIDATE_BUFFER <- 2   # collect up to this multiple of N_TRANSCRIPTS as
+                         # candidates before starting Phase 2
 
 # Date-range stopping heuristic
 # investing.com lists transcripts newest-first; once we see this many
@@ -109,6 +122,7 @@ cat("\n")
 cat("╔══════════════════════════════════════════════════════════════════╗\n")
 cat("║      Earnings Call Transcript Scraper — investing.com            ║\n")
 cat("╚══════════════════════════════════════════════════════════════════╝\n\n")
+cat("  Note: investing.com transcripts are available from Q1 2025 onward.\n\n")
 
 # ── Prompt 1: number of transcripts ───────────────────────────────────────────
 
@@ -132,7 +146,7 @@ if (!is.na(DATE_RANGE_CONFIG)) {
               range_raw))
 } else {
   cat("\n")
-  cat("  Date range (e.g. Q1 2020 - Q4 2024).\n")
+  cat("  Date range (e.g. Q1 2025 - Q4 2025). Earliest available: Q1 2025.\n")
   range_raw <- trimws(read_line(
     "  Press Enter to collect the most recent transcripts > "
   ))
@@ -168,11 +182,32 @@ if (use_date_filter) {
   DATE_END   <- Sys.Date()             # up to today
 }
 
+# ── Prompt 3: optional company filter ─────────────────────────────────────────
+
+if (!is.na(COMPANY_FILTER_CONFIG)) {
+  COMPANY_FILTER <- trimws(as.character(COMPANY_FILTER_CONFIG))
+  cat(sprintf("  Company filter         : %s  (from USER CONFIGURATION block)\n",
+              COMPANY_FILTER))
+} else {
+  cat("\n")
+  cat("  Company name filter — use the name exactly as it appears in article\n")
+  cat("  titles on investing.com (e.g. 'Apple', 'JPMorgan', 'Tesla').\n")
+  COMPANY_FILTER <- trimws(read_line(
+    "  Press Enter to collect transcripts from all companies > "
+  ))
+}
+
+use_company_filter <- nchar(COMPANY_FILTER) > 0L
+if (use_company_filter)
+  cat(sprintf("\n  Company filter: \"%s\"\n", COMPANY_FILTER))
+
 # ── Confirmation ───────────────────────────────────────────────────────────────
 
 cat(sprintf("\n  Will collect up to %d transcripts", N_TRANSCRIPTS))
 if (use_date_filter)
   cat(sprintf(" published between %s and %s", DATE_START, DATE_END))
+if (use_company_filter)
+  cat(sprintf(" for company matching \"%s\"", COMPANY_FILTER))
 cat(sprintf(".\n  Output will be saved to: %s\n\n", OUTPUT_FILE))
 
 go_raw <- trimws(read_line("  Start scraping? [Y/n] > "))
@@ -495,20 +530,19 @@ parse_transcript_page <- function(b, url) {
 }
 
 # =============================================================================
-# ── Main scrape loop ──────────────────────────────────────────────────────────
+# ── Phase 1: Collect candidate URLs from listing pages ────────────────────────
 # =============================================================================
 
-message("Starting Chrome...")
+message("Starting Chrome for listing-page scan...")
 b <- start_browser()
 message("Chrome ready.\n")
 
-collected      <- 0L   # transcripts kept (within date range)
-visited        <- 0L   # articles visited (including skipped ones)
-past_streak    <- 0L   # consecutive articles dated before DATE_START
-done           <- FALSE
-results        <- list()
+candidates  <- character(0L)
+past_streak <- 0L
+done        <- FALSE
+target      <- N_TRANSCRIPTS * CANDIDATE_BUFFER
 
-for (pg in seq_len(500L)) {   # 500-page hard cap; loop exits via `break`
+for (pg in seq_len(500L)) {
 
   if (done) break
 
@@ -524,7 +558,7 @@ for (pg in seq_len(500L)) {   # 500-page hard cap; loop exits via `break`
   )
 
   if (nrow(links_df) == 0L) {
-    message("  No links found — reached the end of the listing or an error occurred.")
+    message("  No links found — reached the end of the listing.")
     break
   }
 
@@ -535,126 +569,140 @@ for (pg in seq_len(500L)) {   # 500-page hard cap; loop exits via `break`
     listing_date  <- links_df$listing_date[i]
     listing_title <- links_df$listing_title[i]
 
-    if (collected >= N_TRANSCRIPTS) {
-      message(sprintf("\n  Target of %d transcripts reached. Stopping.", N_TRANSCRIPTS))
+    # Title filter
+    if (!is.na(listing_title) && nchar(listing_title) > 0L &&
+        !grepl("^Earnings call transcript:", listing_title, ignore.case = TRUE)) next
+
+    # Company filter (silent — can be thousands of skips)
+    if (use_company_filter && !is.na(listing_title) && nchar(listing_title) > 0L &&
+        !grepl(COMPANY_FILTER, listing_title, ignore.case = TRUE)) next
+
+    # Date filter
+    if (!is.na(listing_date)) {
+      if (listing_date > DATE_END) next
+      if (listing_date < DATE_START) {
+        past_streak <- past_streak + 1L
+        if (past_streak >= PAST_START_STREAK_LIMIT) {
+          message(sprintf(
+            "\n  %d consecutive articles predate %s. End of date range reached.",
+            PAST_START_STREAK_LIMIT, DATE_START
+          ))
+          done <- TRUE
+          break
+        }
+        next
+      }
+    }
+
+    past_streak <- 0L
+    candidates  <- c(candidates, url)
+    message(sprintf("  CANDIDATE [%d / %d] %s",
+                    length(candidates), target, str_trunc(basename(url), 55)))
+
+    if (length(candidates) >= target) {
+      message(sprintf("  Collected %d× target. Moving to scrape phase.", CANDIDATE_BUFFER))
       done <- TRUE
       break
     }
-
-    # ── Listing-level pre-filters (no article page visit needed) ─────────────
-
-    # Title filter: skip if clearly not an earnings call transcript
-    if (!is.na(listing_title) && nchar(listing_title) > 0L &&
-        !grepl("^Earnings call transcript:", listing_title, ignore.case = TRUE)) {
-      message(sprintf("  SKIP (listing) not an earnings call: %s",
-                      str_trunc(listing_title, 65)))
-      next
-    }
-
-    # Date filter: skip articles outside the requested date range
-    if (!is.na(listing_date)) {
-      if (listing_date > DATE_END) {
-        message(sprintf("  SKIP (listing) %s is after %s", listing_date, DATE_END))
-        next
-      }
-      if (listing_date < DATE_START) {
-        past_streak <- past_streak + 1L
-        message(sprintf("  SKIP (listing) %s is before %s (streak %d/%d)",
-                        listing_date, DATE_START, past_streak, PAST_START_STREAK_LIMIT))
-        if (past_streak >= PAST_START_STREAK_LIMIT) {
-          message(sprintf(
-            "\n  %d consecutive articles predate %s. End of date range reached.",
-            PAST_START_STREAK_LIMIT, DATE_START
-          ))
-          done <- TRUE
-          break
-        }
-        next
-      }
-    }
-
-    # ── Visit the article page ────────────────────────────────────────────────
-
-    visited <- visited + 1L
-    message(sprintf(
-      "\n  [visited %d | kept %d] %s",
-      visited, collected, str_trunc(basename(url), 70)
-    ))
-
-    result <- tryCatch(
-      parse_transcript_page(b, url),
-      error = function(e) {
-        message("    ERROR: ", e$message)
-        NULL
-      }
-    )
-
-    # If the session died, restart and retry once
-    if (is.null(result) && !session_alive(b)) {
-      b <- restart_browser(b, "session died")
-      message("    Retrying after session restart...")
-      result <- tryCatch(
-        parse_transcript_page(b, url),
-        error = function(e) { message("    ERROR (retry): ", e$message); NULL }
-      )
-    }
-
-    if (!is.null(result)) {
-      art_date <- result$call_date[1]
-
-      if (!is.na(art_date) && art_date > DATE_END) {
-        # Article is newer than the requested range — skip
-        message(sprintf("    SKIP  date %s is after %s", art_date, DATE_END))
-
-      } else if (is.na(art_date) || art_date >= DATE_START) {
-        # Article is within the requested range (or date unknown) — keep
-        past_streak <- 0L
-        collected   <- collected + 1L
-        results[[collected]] <- result
-        message(sprintf("    KEEP  %s | %s %s | %d speaker rows | date %s",
-                        str_trunc(coalesce(result$company_name[1], "?"), 30),
-                        coalesce(result$quarter[1], "?"),
-                        coalesce(as.character(result$call_year[1]), "?"),
-                        nrow(result),
-                        coalesce(as.character(art_date), "unknown")))
-
-      } else {
-        # Article is older than the requested range — count streak
-        past_streak <- past_streak + 1L
-        message(sprintf("    SKIP  date %s is before %s (streak %d/%d)",
-                        art_date, DATE_START, past_streak, PAST_START_STREAK_LIMIT))
-
-        if (past_streak >= PAST_START_STREAK_LIMIT) {
-          message(sprintf(
-            "\n  %d consecutive articles predate %s. End of date range reached.",
-            PAST_START_STREAK_LIMIT, DATE_START
-          ))
-          done <- TRUE
-          break
-        }
-      }
-    }
-
-    # Periodic Chrome restart to prevent memory creep
-    if (visited %% RESTART_CHROME_EVERY == 0L) {
-      b <- restart_browser(b, "memory management")
-    }
-
-    Sys.sleep(DELAY_BETWEEN)
   }
 
   Sys.sleep(DELAY_BETWEEN_PAGES)
 }
 
+tryCatch(b$close(), error = function(e) NULL)
+
+if (length(candidates) == 0L) {
+  message("No candidates found within the specified filters. Nothing to scrape.")
+  quit(save = "no")
+}
+
+message(sprintf("\n── Phase 1 complete. %d candidate URLs collected.\n", length(candidates)))
+
+# =============================================================================
+# ── Phase 2: Parallel article scraping ────────────────────────────────────────
+# =============================================================================
+
+message(sprintf("Starting %d parallel Chrome workers...", N_PARALLEL))
+
+cl <- makeCluster(N_PARALLEL, type = "PSOCK")
+
+clusterExport(cl, c(
+  "parse_transcript_page", "navigate_wait", "get_html",
+  "extract_date_jsonld", "parse_transcript_heading",
+  "start_browser", "CHROME_PATH", "WAIT_ARTICLE"
+), envir = environment())
+
+invisible(clusterEvalQ(cl, {
+  suppressMessages({
+    library(chromote)
+    library(rvest)
+    library(dplyr)
+    library(stringr)
+    library(lubridate)
+    library(jsonlite)
+  })
+  Sys.setenv(CHROMOTE_CHROME = CHROME_PATH)
+  b <<- start_browser()
+  NULL
+}))
+
+message(sprintf("  %d workers ready. Scraping %d candidate articles...\n",
+                N_PARALLEL, length(candidates)))
+
+results_raw <- tryCatch(
+  parLapplyLB(cl, candidates, function(url) {
+    tryCatch(parse_transcript_page(b, url), error = function(e) NULL)
+  }),
+  error = function(e) { message("Parallel scrape error: ", e$message); list() }
+)
+
+invisible(clusterEvalQ(cl, tryCatch(b$close(), error = function(e) NULL)))
+stopCluster(cl)
+
+# =============================================================================
+# ── Post-process: apply article-level filters and trim to N_TRANSCRIPTS ───────
+# =============================================================================
+
+message("\n── Parallel scrape complete. Filtering results...")
+
+collected <- 0L
+results   <- list()
+
+for (result in results_raw) {
+  if (is.null(result)) next
+  if (collected >= N_TRANSCRIPTS) break
+
+  art_date <- result$call_date[1]
+
+  # Authoritative date filter (JSON-LD date from article page)
+  if (!is.na(art_date) && art_date > DATE_END) next
+  if (!is.na(art_date) && art_date < DATE_START) next
+
+  # Authoritative company filter
+  if (use_company_filter &&
+      !grepl(COMPANY_FILTER,
+             coalesce(result$company_name[1], result$article_title[1], ""),
+             ignore.case = TRUE)) next
+
+  collected           <- collected + 1L
+  results[[collected]] <- result
+  message(sprintf("  KEEP [%d/%d]  %s | %s %s | %d rows | %s",
+                  collected, N_TRANSCRIPTS,
+                  str_trunc(coalesce(result$company_name[1], "?"), 28),
+                  coalesce(result$quarter[1], "?"),
+                  coalesce(as.character(result$call_year[1]), "?"),
+                  nrow(result),
+                  coalesce(as.character(art_date), "unknown")))
+}
+
+message(sprintf("\n── Kept %d of %d scraped transcripts.", collected, length(candidates)))
+
 # =============================================================================
 # ── Save output ───────────────────────────────────────────────────────────────
 # =============================================================================
 
-message(sprintf("\n── Finished. Visited %d articles, kept %d transcripts.", visited, collected))
-
 if (length(results) == 0L) {
-  message("No transcripts collected — nothing to save.")
-  tryCatch(b$close(), error = function(e) NULL)
+  message("No transcripts matched the filters — nothing to save.")
   quit(save = "no")
 }
 
@@ -669,7 +717,6 @@ if (use_date_filter) {
                   max(final_df$call_date, na.rm = TRUE)))
 }
 
-# Print a compact summary table
 cat("\n")
 print(
   final_df %>%
@@ -681,6 +728,4 @@ print(
 
 saveRDS(final_df, OUTPUT_FILE)
 message(sprintf("\nSaved → %s\n", OUTPUT_FILE))
-
-tryCatch(b$close(), error = function(e) NULL)
 message("Done.")
