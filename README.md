@@ -69,6 +69,10 @@ constant near the top of whichever script you run.
 
 **`scrape_earnings_calls_interactive.R`**
 
+Prompts you for three parameters (transcript count, date range, and optional
+company filter) then scrapes in two phases: a fast listing-page scan followed
+by parallel article scraping across multiple Chrome workers.
+
 > **Important:** this script must be run from a **Terminal** (macOS Terminal,
 > iTerm2, etc.), not from RStudio's Source button. The interactive prompts rely
 > on terminal stdin and will not work when sourced inside an IDE.
@@ -101,19 +105,25 @@ Or, if you need to specify the full path to Rscript:
 /usr/local/bin/Rscript scrape_earnings_calls_interactive.R
 ```
 
-The script will print a banner and prompt you for two inputs:
+The script will print a banner and prompt you for three inputs:
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
 ║      Earnings Call Transcript Scraper — investing.com            ║
 ╚══════════════════════════════════════════════════════════════════╝
 
+  Note: investing.com transcripts are available from Q1 2025 onward.
+
   How many transcripts to collect? [default: 50] > 100
 
-  Date range (e.g. Q1 2020 - Q4 2024).
-  Press Enter to collect the most recent transcripts > Q1 2022 - Q4 2024
+  Date range (e.g. Q1 2025 - Q4 2025). Earliest available: Q1 2025.
+  Press Enter to collect the most recent transcripts > Q1 2025 - Q4 2025
 
-  Will collect up to 100 transcripts published between 2022-01-01 and 2024-12-31.
+  Company name filter — use the name exactly as it appears in article
+  titles on investing.com (e.g. 'Apple', 'JPMorgan', 'Tesla').
+  Press Enter to collect transcripts from all companies > Apple
+
+  Will collect up to 100 transcripts published between 2025-01-01 and 2025-12-31 for company matching "Apple".
   Output will be saved to: earning_call_transcripts.rds
 
   Start scraping? [Y/n] >
@@ -126,8 +136,9 @@ directly in the `USER CONFIGURATION` block near the top — the prompts will be
 skipped automatically:
 
 ```r
-N_TRANSCRIPTS_CONFIG <- 100             # max transcripts to collect
-DATE_RANGE_CONFIG    <- "Q1 2022 - Q4 2024"  # or NA for most-recent
+N_TRANSCRIPTS_CONFIG  <- 100                   # max transcripts to collect
+DATE_RANGE_CONFIG     <- "Q1 2025 - Q4 2025"  # or NA for most-recent
+COMPANY_FILTER_CONFIG <- "Apple"               # or NA for all companies
 ```
 
 Then source the file as usual.
