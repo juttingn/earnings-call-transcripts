@@ -179,6 +179,14 @@ parse_transcript_page <- function(b, url) {
 
   page          <- read_html(raw_html)
   article_title <- page %>% html_element("h1") %>% html_text(trim = TRUE)
+
+  # Skip anything that is not an earnings call transcript
+  if (!grepl("^Earnings call transcript:", article_title, ignore.case = TRUE)) {
+    message(sprintf("    SKIP  not an earnings call transcript: %s",
+                    str_trunc(article_title, 70)))
+    return(NULL)
+  }
+
   call_date     <- extract_date_jsonld(page)
 
   # Locate article body
