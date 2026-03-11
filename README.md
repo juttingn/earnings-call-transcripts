@@ -4,6 +4,14 @@ An R-based web scraper that collects earnings call transcripts from
 [investing.com/news/transcripts](https://www.investing.com/news/transcripts)
 and structures them into a tidy dataset for text analysis.
 
+Earnings calls provide a rich source of firm-level information typically occurring every quarter. Following a
+presentation of the company’s earnings, external analysts can ask questions in a Q&A session,
+on both backward- and forward-looking matters they would like to get more details on. The transcripts can be key insights into the most pressing issues companies are facing, and have been used to create indices of firm-level exposure to different topics over time.
+
+This project directly relates to my Master Thesis, which you can find [here](https://juttingn.github.io/personal-site/thesis.pdf), where I used company earning calls to estimate the geoeconomic risk exposure companies have been facing over time, and looked at how said exposure affected firm's investment response to Russia's invasion of Ukraine. 
+
+This scraper is a first step to deepen the analysis of my Master Thesis by recovering the full transcripts of the earnings calls, which were previously not accesible to me, and were instead accessed through the NL Analytics platform. The main disadvantage of this platform is that it only allows you to run a dictionary-based keyword query on the transcripts. By gaining full access to the transcripts, I pkan to use more sophisticated Large Language Model classification techniques in my analysis to further disentangle between the different types of geoeconomic risk companies are facing. 
+
 ---
 
 ## Table of Contents
