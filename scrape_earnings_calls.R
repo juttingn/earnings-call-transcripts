@@ -24,7 +24,7 @@ suppressMessages({
 # ── Configuration ─────────────────────────────────────────────────────────────
 CHROME_PATH   <- "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 BASE_URL      <- "https://www.investing.com/news/transcripts"
-N_TRANSCRIPTS <- 50
+N_TRANSCRIPTS <- 5
 OUTPUT_FILE   <- "earning_call_transcripts.rds"
 WAIT_LIST     <- 10   # seconds after navigating to listing page
 WAIT_ARTICLE  <- 8    # seconds after navigating to article page
@@ -291,26 +291,40 @@ navigate_wait(b, BASE_URL, WAIT_LIST)
 html_listing <- get_html(b)
 page_listing <- read_html(html_listing)
 
-all_hrefs <- page_listing %>%
-  html_elements("a[href]") %>%
-  html_attr("href")
+all_anchors <- page_listing %>% html_elements("a[href]")
+all_hrefs   <- html_attr(all_anchors, "href")
 
-transcript_links <- all_hrefs %>%
-  grep("/news/transcripts/[^/]+-\\d+$", ., value = TRUE) %>%
-  unique() %>%
-  { ifelse(startsWith(., "http"), ., paste0("https://www.investing.com", .)) }
+is_trans      <- grepl("/news/transcripts/[^/]+-\\d+$", all_hrefs)
+trans_hrefs   <- all_hrefs[is_trans]
+trans_anchors <- all_anchors[is_trans]
+dedup_idx     <- !duplicated(trans_hrefs)
+trans_hrefs   <- trans_hrefs[dedup_idx]
+trans_anchors <- trans_anchors[dedup_idx]
+
+transcript_links  <- ifelse(startsWith(trans_hrefs, "http"), trans_hrefs,
+                             paste0("https://www.investing.com", trans_hrefs))
+transcript_titles <- html_text(trans_anchors, trim = TRUE)
 
 if (length(transcript_links) == 0) {
-  transcript_links <- all_hrefs %>%
+  # Fallback: broader search (titles unavailable in this path)
+  fallback_hrefs   <- all_hrefs %>%
     grep("transcript", ., ignore.case = TRUE, value = TRUE) %>%
     grep("^/|^http", ., value = TRUE) %>%
-    unique() %>%
-    { ifelse(startsWith(., "http"), ., paste0("https://www.investing.com", .)) }
+    unique()
+  transcript_links  <- ifelse(startsWith(fallback_hrefs, "http"), fallback_hrefs,
+                               paste0("https://www.investing.com", fallback_hrefs))
+  transcript_titles <- rep("", length(transcript_links))
 }
 
 message(sprintf("Found %d transcript links", length(transcript_links)))
 if (length(transcript_links) == 0)
   stop("No transcript links found. Page structure may have changed.")
+
+# Pre-filter: keep only earnings call transcripts (or those with no title yet)
+is_earnings_call  <- nchar(transcript_titles) == 0L |
+                     grepl("^Earnings call transcript:", transcript_titles, ignore.case = TRUE)
+transcript_links  <- transcript_links[is_earnings_call]
+message(sprintf("After title pre-filter: %d earnings call links", length(transcript_links)))
 
 links_to_scrape <- head(transcript_links, N_TRANSCRIPTS)
 
