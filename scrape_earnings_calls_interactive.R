@@ -245,30 +245,62 @@ get_html <- function(b) {
 # ── Listing-page helper ───────────────────────────────────────────────────────
 # =============================================================================
 
-#' Navigate to a listing page and return all transcript article URLs found.
+#' Navigate to a listing page and return transcript links with metadata.
+#'
+#' Returns a data frame with one row per unique transcript URL, including the
+#' article title and publication date scraped from the listing page itself.
+#' These are used to pre-filter articles by title and date range without
+#' needing to visit each individual article page first.
 #'
 #' @param b    A ChromoteSession.
 #' @param page Integer page number (1 = first page).
-#' @return A character vector of absolute transcript URLs.
+#' @return A data frame with columns: url, listing_date (Date|NA), listing_title.
 get_listing_links <- function(b, page) {
   url <- if (page == 1L) BASE_URL else sprintf("%s/%d", BASE_URL, page)
   navigate_wait(b, url, WAIT_LIST)
 
   html <- get_html(b)
-  if (is.na(html)) return(character(0L))
+  empty <- data.frame(url = character(0L), listing_date = as.Date(character(0L)),
+                      listing_title = character(0L), stringsAsFactors = FALSE)
+  if (is.na(html)) return(empty)
 
   parsed <- tryCatch(read_html(html), error = function(e) NULL)
-  if (is.null(parsed)) return(character(0L))
+  if (is.null(parsed)) return(empty)
 
-  hrefs <- parsed %>% html_elements("a[href]") %>% html_attr("href")
+  # Collect anchor elements whose href matches a transcript article URL
+  all_anchors   <- parsed %>% html_elements("a[href]")
+  all_hrefs     <- html_attr(all_anchors, "href")
+  is_trans      <- grepl("/news/transcripts/[^/]+-\\d+$", all_hrefs)
+  trans_anchors <- all_anchors[is_trans]
+  trans_hrefs   <- all_hrefs[is_trans]
 
-  # Article links end with a numeric ID, e.g. /news/transcripts/slug-123456
-  links <- hrefs %>%
-    grep("/news/transcripts/[^/]+-\\d+$", ., value = TRUE) %>%
-    unique() %>%
-    { ifelse(startsWith(., "http"), ., paste0("https://www.investing.com", .)) }
+  # Deduplicate (keep first occurrence per URL)
+  dedup_idx     <- !duplicated(trans_hrefs)
+  trans_anchors <- trans_anchors[dedup_idx]
+  trans_hrefs   <- trans_hrefs[dedup_idx]
 
-  links
+  if (length(trans_hrefs) == 0L) return(empty)
+
+  urls   <- ifelse(startsWith(trans_hrefs, "http"), trans_hrefs,
+                   paste0("https://www.investing.com", trans_hrefs))
+  titles <- html_text(trans_anchors, trim = TRUE)
+
+  # Extract publication dates from <time datetime="..."> elements.
+  # Listing pages have one <time> per article in document order, so we
+  # pair them positionally with the links.
+  time_dt    <- parsed %>% html_elements("time[datetime]") %>% html_attr("datetime")
+  time_dates <- suppressWarnings(as.Date(str_extract(time_dt, "^\\d{4}-\\d{2}-\\d{2}")))
+  time_dates <- time_dates[!is.na(time_dates)]
+
+  n <- length(urls)
+  listing_dates <- if (length(time_dates) >= n) {
+    time_dates[seq_len(n)]
+  } else {
+    c(time_dates, rep(NA_Date_, n - length(time_dates)))
+  }
+
+  data.frame(url = urls, listing_date = listing_dates, listing_title = titles,
+             stringsAsFactors = FALSE)
 }
 
 # =============================================================================
@@ -477,28 +509,66 @@ for (pg in seq_len(500L)) {   # 500-page hard cap; loop exits via `break`
 
   message(sprintf("── Listing page %d ──────────────────────────────────────────────────────", pg))
 
-  links <- tryCatch(
+  links_df <- tryCatch(
     get_listing_links(b, pg),
     error = function(e) {
       message("  ERROR on listing page: ", e$message)
-      character(0L)
+      data.frame(url = character(0L), listing_date = as.Date(character(0L)),
+                 listing_title = character(0L), stringsAsFactors = FALSE)
     }
   )
 
-  if (length(links) == 0L) {
+  if (nrow(links_df) == 0L) {
     message("  No links found — reached the end of the listing or an error occurred.")
     break
   }
 
-  message(sprintf("  Found %d transcript links on this page.", length(links)))
+  message(sprintf("  Found %d transcript links on this page.", nrow(links_df)))
 
-  for (url in links) {
+  for (i in seq_len(nrow(links_df))) {
+    url           <- links_df$url[i]
+    listing_date  <- links_df$listing_date[i]
+    listing_title <- links_df$listing_title[i]
 
     if (collected >= N_TRANSCRIPTS) {
       message(sprintf("\n  Target of %d transcripts reached. Stopping.", N_TRANSCRIPTS))
       done <- TRUE
       break
     }
+
+    # ── Listing-level pre-filters (no article page visit needed) ─────────────
+
+    # Title filter: skip if clearly not an earnings call transcript
+    if (!is.na(listing_title) && nchar(listing_title) > 0L &&
+        !grepl("^Earnings call transcript:", listing_title, ignore.case = TRUE)) {
+      message(sprintf("  SKIP (listing) not an earnings call: %s",
+                      str_trunc(listing_title, 65)))
+      next
+    }
+
+    # Date filter: skip articles outside the requested date range
+    if (!is.na(listing_date)) {
+      if (listing_date > DATE_END) {
+        message(sprintf("  SKIP (listing) %s is after %s", listing_date, DATE_END))
+        next
+      }
+      if (listing_date < DATE_START) {
+        past_streak <- past_streak + 1L
+        message(sprintf("  SKIP (listing) %s is before %s (streak %d/%d)",
+                        listing_date, DATE_START, past_streak, PAST_START_STREAK_LIMIT))
+        if (past_streak >= PAST_START_STREAK_LIMIT) {
+          message(sprintf(
+            "\n  %d consecutive articles predate %s. End of date range reached.",
+            PAST_START_STREAK_LIMIT, DATE_START
+          ))
+          done <- TRUE
+          break
+        }
+        next
+      }
+    }
+
+    # ── Visit the article page ────────────────────────────────────────────────
 
     visited <- visited + 1L
     message(sprintf(
