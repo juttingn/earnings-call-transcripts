@@ -109,18 +109,24 @@ get_listing_links <- function(b, page_num) {
   navigate_wait(b, url, WAIT_LIST)
 
   html <- get_html(b)
-  if (is.na(html)) return(list(links = character(0), max_page = NA_integer_))
+  empty_links <- data.frame(url = character(0L), listing_title = character(0L),
+                             stringsAsFactors = FALSE)
+  if (is.na(html)) return(list(links = empty_links, max_page = NA_integer_))
 
   page <- tryCatch(read_html(html), error = function(e) NULL)
-  if (is.null(page)) return(list(links = character(0), max_page = NA_integer_))
+  if (is.null(page)) return(list(links = empty_links, max_page = NA_integer_))
 
-  all_hrefs <- page %>% html_elements("a[href]") %>% html_attr("href")
+  all_anchors <- page %>% html_elements("a[href]")
+  all_hrefs   <- html_attr(all_anchors, "href")
 
   # Article links: slug ending with a numeric ID
-  links <- all_hrefs %>%
-    grep("/news/transcripts/[^/]+-\\d+$", ., value = TRUE) %>%
-    unique() %>%
-    { ifelse(startsWith(., "http"), ., paste0("https://www.investing.com", .)) }
+  is_trans    <- grepl("/news/transcripts/[^/]+-\\d+$", all_hrefs)
+  trans_hrefs <- all_hrefs[is_trans]
+  trans_anch  <- all_anchors[is_trans]
+  dedup_idx   <- !duplicated(trans_hrefs)
+  urls   <- ifelse(startsWith(trans_hrefs[dedup_idx], "http"), trans_hrefs[dedup_idx],
+                   paste0("https://www.investing.com", trans_hrefs[dedup_idx]))
+  titles <- html_text(trans_anch[dedup_idx], trim = TRUE)
 
   # Max page from pagination numbers
   page_nums <- all_hrefs %>%
@@ -130,7 +136,7 @@ get_listing_links <- function(b, page_num) {
     .[!is.na(.)]
 
   list(
-    links    = links,
+    links    = data.frame(url = urls, listing_title = titles, stringsAsFactors = FALSE),
     max_page = if (length(page_nums) > 0) max(page_nums) else NA_integer_
   )
 }
@@ -338,7 +344,8 @@ for (pg in start_page:max_page) {
     error = function(e) {
       message("  ERROR fetching listing page: ", e$message)
       log_error(sprintf("LISTING PAGE %d", pg), e$message)
-      list(links = character(0), max_page = NA_integer_)
+      list(links = data.frame(url = character(0L), listing_title = character(0L),
+                              stringsAsFactors = FALSE), max_page = NA_integer_)
     }
   )
 
@@ -348,16 +355,23 @@ for (pg in start_page:max_page) {
     message(sprintf("  Max page updated to %d (~%d transcripts)", max_page, max_page * 35))
   }
 
-  if (length(listing$links) == 0 && is.na(listing$max_page)) {
+  if (nrow(listing$links) == 0L && is.na(listing$max_page)) {
     message(sprintf("  No links found on page %d — stopping", pg))
     break
   }
 
-  new_links <- listing$links[!sapply(listing$links, is_done)]
-  message(sprintf("  Found %d links, %d new (not yet scraped)",
-                  length(listing$links), length(new_links)))
+  # Pre-filter: skip articles clearly not earnings call transcripts
+  links_df <- listing$links
+  is_ec    <- nchar(links_df$listing_title) == 0L |
+              grepl("^Earnings call transcript:", links_df$listing_title, ignore.case = TRUE)
+  links_df <- links_df[is_ec, , drop = FALSE]
 
-  for (url in new_links) {
+  new_links_df <- links_df[!sapply(links_df$url, is_done), , drop = FALSE]
+  message(sprintf("  Found %d links, %d new (not yet scraped)",
+                  nrow(listing$links), nrow(new_links_df)))
+
+  for (i in seq_len(nrow(new_links_df))) {
+    url <- new_links_df$url[i]
     articles_this_session <- articles_this_session + 1L
 
     message(sprintf("    [#%d | pg%d] %s",
